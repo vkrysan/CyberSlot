@@ -1,47 +1,206 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const canvas = document.getElementById("reel");
-  const ctx = canvas.getContext("2d");
-  const spinBtn = document.getElementById("spinBtn");
-  const stopBtn = document.getElementById("stopBtn");
-  const resultDiv = document.getElementById("result");
-
   const symbols = ["🍒", "🍋", "🍊", "🍇", "🍉", "🍎"];
-  const symbolHeight = 80;
   const visibleCount = 4;
-  const reelLength = symbols.length;
 
-  let position = 0; // текущая позиция барабана (в пикселях)
-  let speed = 0; // текущая скорость (пикс/кадр)
-  let spinning = false;
-  let animationFrame;
-  let stopRequested = false;
-  let deceleration = 0.15; // замедление
+  class Reel {
+    /**
+     * @param {HTMLCanvasElement} canvas - Canvas для отрисовки барабана
+     * @param {HTMLElement} resultDiv - Элемент для вывода результата
+     */
+    constructor(canvas, resultDiv) {
+      this.canvas = canvas;
+      this.ctx = canvas.getContext("2d");
+      this.resultDiv = resultDiv;
+      this.position = 0;
+      this.speed = 0;
+      this.spinning = false;
+      this.stopRequested = false;
+      this.deceleration = 0.15;
+      this.symbolHeight = 80;
+      this.targetSymbol = null;
+      this.scaleAnim = 1;
+      this.scaleDirection = 1;
+      this.scaleAnimating = false;
+      this.reelLength = symbols.length;
+      this.visibleCount = visibleCount;
+      this.spinAudio = new Audio("assets/spin.mp3");
+      this.stopAudio = new Audio("assets/stop.mp3");
+      this.spinAudio.loop = true;
+      this.resize();
+      window.addEventListener("resize", () => this.resize());
+      this.draw();
+    }
 
-  // Звуки
-  let spinAudio = new Audio("assets/spin.mp3");
-  let stopAudio = new Audio("assets/stop.mp3");
-  spinAudio.loop = true;
+    getSizes() {
+      let w = Math.min(window.innerWidth * 0.18, 180);
+      let h = Math.min(w * this.visibleCount, 340);
+      let symbolH = h / this.visibleCount;
+      return { w, h, symbolH };
+    }
 
-  // Адаптивные размеры
-  function getSizes() {
-    // Более компактные размеры
-    let w = Math.min(window.innerWidth * 0.18, 180);
-    let h = Math.min(w * visibleCount, 340);
-    let symbolH = h / visibleCount;
-    return { w, h, symbolH };
+    resize() {
+      const { w, h, symbolH } = this.getSizes();
+      this.canvas.width = w;
+      this.canvas.height = h;
+      this.symbolHeight = symbolH;
+      this.draw();
+    }
+
+    draw() {
+      const ctx = this.ctx;
+      ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      for (let i = -1; i < this.visibleCount + 1; i++) {
+        let symbolIndex =
+          Math.floor(this.position / this.symbolHeight + i) % this.reelLength;
+        if (symbolIndex < 0) symbolIndex += this.reelLength;
+        let y = i * this.symbolHeight - (this.position % this.symbolHeight);
+        ctx.save();
+        if (i === 1 && this.scaleAnimating) {
+          ctx.translate(this.canvas.width / 2, y + this.symbolHeight / 2);
+          ctx.scale(this.scaleAnim, this.scaleAnim);
+          ctx.shadowColor = "#ffd700";
+          ctx.shadowBlur = 30;
+          ctx.font = `${Math.round(this.symbolHeight * 0.75)}px serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(symbols[symbolIndex], 0, 0);
+          ctx.restore();
+          continue;
+        }
+        ctx.font = `${Math.round(this.symbolHeight * 0.75)}px serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(
+          symbols[symbolIndex],
+          this.canvas.width / 2,
+          y + this.symbolHeight / 2
+        );
+        ctx.restore();
+      }
+      ctx.strokeStyle = "#ffb300";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(
+        0,
+        this.symbolHeight,
+        this.canvas.width,
+        this.symbolHeight
+      );
+    }
+
+    animate() {
+      this.position += this.speed;
+      if (this.position < 0)
+        this.position += this.reelLength * this.symbolHeight;
+      if (this.position >= this.reelLength * this.symbolHeight)
+        this.position -= this.reelLength * this.symbolHeight;
+      this.draw();
+      if (this.spinning) {
+        if (!this.stopRequested && this.speed < 24) {
+          this.speed += 0.7;
+          if (this.speed > 24) this.speed = 24;
+        }
+        if (this.stopRequested) {
+          if (this.targetSymbol) {
+            let centerIndex =
+              Math.floor(this.position / this.symbolHeight + 1) %
+              this.reelLength;
+            if (centerIndex < 0) centerIndex += this.reelLength;
+            let targetIndex = symbols.indexOf(this.targetSymbol);
+            let diff =
+              (targetIndex - centerIndex + this.reelLength) % this.reelLength;
+            let deltaPx =
+              diff * this.symbolHeight - (this.position % this.symbolHeight);
+            if (Math.abs(deltaPx) < 2 && this.speed < 2) {
+              this.speed = 0;
+              this.spinning = false;
+              this.showResult();
+              return;
+            }
+            if (this.speed > 2) {
+              this.speed -= this.deceleration;
+            } else {
+              this.speed = Math.max(0.7, this.speed - this.deceleration * 2);
+            }
+          } else {
+            if (this.speed > 2) {
+              this.speed -= this.deceleration;
+            } else {
+              let mod = this.position % this.symbolHeight;
+              if (mod < 2 || mod > this.symbolHeight - 2) {
+                this.speed = 0;
+                this.spinning = false;
+                this.showResult();
+                return;
+              }
+              this.speed = Math.max(0.7, this.speed - this.deceleration * 2);
+            }
+          }
+        }
+        requestAnimationFrame(() => this.animate());
+      }
+    }
+
+    animateScale() {
+      if (!this.scaleAnimating) return;
+      this.scaleAnim += 0.04 * this.scaleDirection;
+      if (this.scaleAnim > 1.18) this.scaleDirection = -1;
+      if (this.scaleAnim < 1.0) {
+        this.scaleAnim = 1.0;
+        this.scaleAnimating = false;
+        this.draw();
+        return;
+      }
+      this.draw();
+      requestAnimationFrame(() => this.animateScale());
+    }
+
+    showResult() {
+      this.position =
+        Math.round(this.position / this.symbolHeight) * this.symbolHeight;
+      let centerIndex =
+        Math.floor(this.position / this.symbolHeight + 1) % this.reelLength;
+      if (centerIndex < 0) centerIndex += this.reelLength;
+      this.draw();
+      this.spinAudio.pause();
+      this.spinAudio.currentTime = 0;
+      this.stopAudio.play();
+      this.scaleAnim = 1.0;
+      this.scaleDirection = 1;
+      this.scaleAnimating = true;
+      this.animateScale();
+      if (this.resultDiv) {
+        this.resultDiv.textContent = `Выпало: ${symbols[centerIndex]}`;
+        console.log(`Выпало: ${symbols[centerIndex]}`);
+      }
+    }
+
+    getResultSymbol() {
+      let centerIndex =
+        Math.floor(this.position / this.symbolHeight + 1) % this.reelLength;
+      if (centerIndex < 0) centerIndex += this.reelLength;
+      return symbols[centerIndex];
+    }
+
+    async spin() {
+      if (this.spinning) return;
+      this.spinning = true;
+      this.stopRequested = false;
+      this.speed = 2;
+      this.targetSymbol = null;
+      this.scaleAnimating = false;
+      if (this.resultDiv) this.resultDiv.textContent = "";
+      this.spinAudio.play();
+      this.animate();
+      const symbolFromServer = await fakeServerRequest();
+      this.targetSymbol = symbolFromServer;
+      this.stopRequested = true;
+    }
+
+    stop() {
+      if (this.spinning) this.stopRequested = true;
+    }
   }
 
-  function resizeCanvas() {
-    const { w, h, symbolH } = getSizes();
-    canvas.width = w;
-    canvas.height = h;
-    symbolHeight = symbolH;
-    drawReel();
-  }
-
-  window.addEventListener("resize", resizeCanvas);
-
-  // Имитация "сервера"
   function fakeServerRequest() {
     return new Promise((resolve) => {
       setTimeout(() => {
@@ -51,154 +210,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  let targetSymbol = null;
-  let scaleAnim = 1;
-  let scaleDirection = 1;
-  let scaleAnimating = false;
+  const canvas = document.getElementById("reel");
+  const resultDiv = document.getElementById("result");
+  const spinBtn = document.getElementById("spinBtn");
+  const stopBtn = document.getElementById("stopBtn");
 
-  function drawReel() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (let i = -1; i < visibleCount + 1; i++) {
-      let symbolIndex = Math.floor(position / symbolHeight + i) % reelLength;
-      if (symbolIndex < 0) symbolIndex += reelLength;
-      let y = i * symbolHeight - (position % symbolHeight);
-      ctx.save();
-      // scale и glow для центрального символа
-      if (i === 1 && scaleAnimating) {
-        ctx.translate(canvas.width / 2, y + symbolHeight / 2);
-        ctx.scale(scaleAnim, scaleAnim);
-        ctx.shadowColor = "#ffd700";
-        ctx.shadowBlur = 30;
-        ctx.font = `${Math.round(symbolHeight * 0.75)}px serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(symbols[symbolIndex], 0, 0);
-        ctx.restore();
-        continue;
-      }
-      ctx.font = `${Math.round(symbolHeight * 0.75)}px serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(
-        symbols[symbolIndex],
-        canvas.width / 2,
-        y + symbolHeight / 2
-      );
-      ctx.restore();
-    }
-    // рамка
-    ctx.strokeStyle = "#ffb300";
-    ctx.lineWidth = 4;
-    ctx.strokeRect(0, symbolHeight, canvas.width, symbolHeight);
-  }
+  const reel = new Reel(canvas, resultDiv);
 
-  function animate() {
-    position += speed;
-    if (position < 0) position += reelLength * symbolHeight;
-    if (position >= reelLength * symbolHeight)
-      position -= reelLength * symbolHeight;
-
-    drawReel();
-
-    if (spinning) {
-      if (!stopRequested && speed < 24) {
-        speed += 0.7;
-        if (speed > 24) speed = 24;
-      }
-      if (stopRequested) {
-        // если есть целевой символ, замедляем и ловим его
-        if (targetSymbol) {
-          let centerIndex =
-            Math.floor(position / symbolHeight + 1) % reelLength;
-          if (centerIndex < 0) centerIndex += reelLength;
-          let targetIndex = symbols.indexOf(targetSymbol);
-          let diff = (targetIndex - centerIndex + reelLength) % reelLength;
-          let deltaPx = diff * symbolHeight - (position % symbolHeight);
-
-          // Если мы почти на нужной позиции и скорость маленькая — останавливаем
-          if (Math.abs(deltaPx) < 2 && speed < 2) {
-            speed = 0;
-            spinning = false;
-            showResult();
-            return;
-          }
-
-          // Если близко к цели — плавно замедляем
-          if (speed > 2) {
-            speed -= deceleration;
-          } else {
-            speed = Math.max(0.7, speed - deceleration * 2);
-          }
-        } else {
-          // fallback: обычное замедление
-          if (speed > 2) {
-            speed -= deceleration;
-          } else {
-            let mod = position % symbolHeight;
-            if (mod < 2 || mod > symbolHeight - 2) {
-              speed = 0;
-              spinning = false;
-              showResult();
-              return;
-            }
-            speed = Math.max(0.7, speed - deceleration * 2);
-          }
-        }
-      }
-      animationFrame = requestAnimationFrame(animate);
-    }
-  }
-
-  function showResult() {
-    position = Math.round(position / symbolHeight) * symbolHeight;
-    let centerIndex = Math.floor(position / symbolHeight + 1) % reelLength;
-    if (centerIndex < 0) centerIndex += reelLength;
-    drawReel();
-    resultDiv.textContent = `Выпало: ${symbols[centerIndex]}`;
-    console.log(`Выпало: ${symbols[centerIndex]}`);
-    spinAudio.pause();
-    spinAudio.currentTime = 0;
-    stopAudio.play();
-    // scale-анимация
-    scaleAnim = 1.0;
-    scaleDirection = 1;
-    scaleAnimating = true;
-    animateScale();
-  }
-
-  function animateScale() {
-    if (!scaleAnimating) return;
-    scaleAnim += 0.04 * scaleDirection;
-    if (scaleAnim > 1.18) scaleDirection = -1;
-    if (scaleAnim < 1.0) {
-      scaleAnim = 1.0;
-      scaleAnimating = false;
-      drawReel();
-      return;
-    }
-    drawReel();
-    requestAnimationFrame(animateScale);
-  }
-
-  spinBtn.onclick = async () => {
-    if (spinning) return;
-    spinning = true;
-    stopRequested = false;
-    speed = 2;
-    resultDiv.textContent = "";
-    targetSymbol = null;
-    spinAudio.play();
-    animate();
-    // "запрос" к серверу
-    const symbolFromServer = await fakeServerRequest();
-    targetSymbol = symbolFromServer;
-    stopRequested = true;
-  };
-
-  stopBtn.onclick = () => {
-    if (spinning) stopRequested = true;
-  };
-
-  // начальный рендер
-  resizeCanvas();
+  spinBtn.onclick = () => reel.spin();
+  stopBtn.onclick = () => reel.stop();
 });
